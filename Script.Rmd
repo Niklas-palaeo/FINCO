@@ -1,0 +1,429 @@
+---
+title: "Franchthi AAR"
+author: "Niklas Hausmann"
+date: "Today"
+output: pdf_document
+---
+
+# Libraries 
+```{r Libraries,echo=FALSE,message = FALSE,warning = FALSE}
+knitr::opts_chunk$set(echo=FALSE,message = FALSE,warning = FALSE)
+
+{
+  pacman::p_load(
+    here,
+    janitor,
+    tidyverse,
+    cowplot,ggx,
+    patchwork,
+    RColorBrewer) 
+  
+  theme_set(theme_cowplot())
+}
+```
+
+# Data
+
+```{r}
+AAR <- read_csv(here("data","AAR.csv")) %>% 
+  clean_names() %>% 
+  rename(sample_name=x13) %>% 
+  select(-total) %>% 
+  mutate(ser_d_l=as.numeric(ser_d_l),
+         tyr_d_l=as.numeric(tyr_d_l),
+         phe_d_l=as.numeric(phe_d_l),
+         leu_d_l=as.numeric(leu_d_l),
+         ile_d_l=as.numeric(ile_d_l)
+  ) %>% 
+  separate(sample_name,remove = FALSE,into = c("trench","unit","specimen")) %>% 
+  mutate(unit=if_else(nchar(unit)==2,paste0("0",unit),unit),
+         unit=as.numeric(unit))
+
+ProbChron <- read_csv(here("data", "Prob_chron_cont.csv")) %>%
+  clean_names() %>%
+  filter(prob_chron!="EN-MN mixed",
+         prob_chron!="FN; Mixed",
+         prob_chron!="MN, EN & MN"
+         ) %>% 
+  mutate(unit=as.character(unit)) %>% 
+  mutate(prob_chron = factor(
+    prob_chron,
+    levels = c(
+      "FP",
+      "FP/LM",
+      "LM",
+      "UM/LM",
+      "UM",
+      "UM/FM",
+      "FM",
+      "FM/IN",
+      "IN",
+      "IN-EN",
+      "EN",
+      "EN-MN",
+      "MN",
+      "MN-LN",
+      "MN-FN",
+      "LN",
+      "FN",
+      "FN-PostNeo"
+    )))%>% 
+  mutate(unit=if_else(nchar(unit)==2,paste0("0",unit),unit),
+         unit=as.numeric(unit))
+
+
+C14 <- tibble::tribble(
+         ~trench, ~unit,  ~c14,
+           "H1A",  "110", 8940L,
+           "FAS",  "145", 7980L,#changed from 146
+           "FAS",  "142", 7930L, #changed from 143
+           "FAN",  "175", 8710L, #changed from 177
+           "FAN",  "172", 8025L, #changed from 169
+           "FAN",  "166", 7962L,
+           "FAN",  "163", 7772L,
+           "FAN",  "162", 7712L,
+           "FAN",  "156", 7875L, #changed from 159
+           "FAN",  "151", 7910L,
+           "FAN",  "158", 7555L
+         )%>% 
+  mutate(unit=if_else(nchar(unit)==2,paste0("0",unit),unit),
+         unit=as.numeric(unit))
+
+AAR_chron <- AAR %>% 
+    left_join(by = c("trench","unit"),C14) %>%   
+    left_join(by = c("trench","unit"),ProbChron) %>% 
+    arrange(unit) %>%
+    fill(prob_chron,.direction = "down") %>% 
+    mutate(area=if_else(trench=="FAN"|trench=="FAS","Cave","Beach"))
+
+
+rm(C14,AAR,ProbChron)
+
+```
+
+
+
+
+# Quality
+
+## F vs H
+```{r}
+
+gg_point <- AAR_chron %>% 
+    pivot_longer(1:11,names_to = "aa",values_to = "d_l") %>% 
+    pivot_wider(names_from = "type",values_from = "d_l",values_fn = mean) %>%
+  # filter(type=="H") %>% 
+  # filter(aa=="ser_ala"|aa=="ala_d_l"&H<1) %>% 
+  # left_join(by = c("trench","unit"),C14) %>% 
+  # filter(c14!=is.na(c14)) %>% 
+  # left_join(by = c("trench","unit"),ProbChron) %>%
+  # filter(prob_chron!=is.na(prob_chron)) %>% 
+  ggplot()+
+  aes(x=`F`,
+      y=H,
+      col=area
+      )+
+  # stat_ellipse(geom = "polygon",alpha=0.3)+
+  ggiraph::geom_point_interactive(aes(tooltip = sample_name ),size=1)+
+  xlim(0,1.5)+
+  # geom_text(aes(label=unit),nudge_y = 0.05)+
+  facet_wrap(~aa,scales="free")+
+  ggtitle("Quality")
+
+
+x <- ggiraph::girafe(ggobj = gg_point,width_svg = 8,height_svg = 6)
+if( interactive() ) print(x)
+
+```
+
+
+
+## Glxs Shenanigans
+```{r}
+AAR_chron %>% 
+  # filter(type=="H") %>% 
+  ggplot()+
+  aes(unit,glx_d_l,col=type)+
+  geom_point()+
+  geom_hline(yintercept = 0.3)
+
+
+
+
+```
+
+
+## Heating (Asx_d_l/Glx_d_l)
+```{r}
+Heat_Curve_Crisp <- seq(0.06, 1, length.out = 100) %>%
+  as_tibble() %>%
+  rename(asx_d_l=value) %>%
+  mutate(glx_d_l = 2.627 * asx_d_l^3 + -2.9965 * asx_d_l^2 + 1.2985 * asx_d_l + -0.0668)
+
+Ortiz <- read_csv(here("data","Ortizetal2015.csv")) %>% 
+  clean_names() %>% 
+  filter(!is.na(lab_code)) %>% 
+  mutate(outlier=if_else(is.na(rejection_criterion_a),FALSE,TRUE)) %>% 
+  rename(asx_d_l=asp_d_l,
+         glx_d_l=d_l_glu)
+
+
+# Ortiz %>% 
+#   filter(shell_fraction=="apex") %>% 
+#   ggplot()+
+#   aes(asx_d_l,glx_d_l,col=outlier)+
+#   geom_point() +
+#   geom_smooth()
+
+
+Heat_Data_Ortiz <-  Ortiz %>% 
+  filter(
+    # shell_fraction=="rim",
+    shell_fraction=="apex (bleached)",
+    # shell_fraction=="apex",
+         outlier==FALSE
+         ) %>%
+  select(asx_d_l,glx_d_l,outlier,shell_fraction)
+
+
+Heat_Model_Ortiz <- nls(glx_d_l ~ a * exp(b * asx_d_l), 
+             data = Heat_Data_Ortiz, 
+             start = list(a = 0.1, b = 1))
+
+
+
+Heat_Curve_Ortiz <- seq(0.06, 1, length.out = 100) %>%
+  as_tibble() %>%
+  rename(asx_d_l=value) %>%
+  mutate(glx_d_l = coef(Heat_Model_Ortiz)["a"] * exp(coef(Heat_Model_Ortiz)["b"] * asx_d_l))
+
+
+# Heat_Data_Ortiz <- Heat_Data_Ortiz %>% 
+#     mutate(residuals = glx_d_l - predict(Heat_Model_Ortiz, Heat_Data_Ortiz),
+#            sigma = sd(residuals)
+#            )
+
+
+Heat_Data <- AAR_chron %>% 
+  filter(type=="H",
+         # area=="Cave"
+         ) %>% 
+  select(asx_d_l,glx_d_l,area)
+
+Heat_Model <- nls(glx_d_l ~ a * exp(b * asx_d_l), 
+             data = Heat_Data, 
+             start = list(a = 0.1, b = 1))
+
+Heat_Curve <- seq(0.06,1, length.out = 100) %>% 
+  as_tibble() %>%
+  rename(asx_d_l=value) %>% 
+    mutate(glx_d_l = coef(Heat_Model)["a"] * exp(coef(Heat_Model)["b"] * asx_d_l))
+
+Heat_Data <- Heat_Data %>% 
+    mutate(residuals = glx_d_l - predict(Heat_Model, Heat_Data),
+           sigma = sd(residuals)
+           )
+
+
+
+Heat_Data %>% 
+ggplot()+
+  aes(asx_d_l,glx_d_l) +
+    geom_point(show.legend = FALSE) +
+      # geom_point(aes(color = abs(residuals) < 2 * sigma),show.legend = FALSE) +
+
+  # scale_colour_manual(values = c("red","black"))+
+  geom_point(data=Heat_Data_Ortiz %>% filter(shell_fraction=="apex (bleached)"|shell_fraction=="apex"),aes(asx_d_l,glx_d_l,col=shell_fraction),inherit.aes = FALSE,)+
+  geom_line(data = Heat_Curve,aes(asx_d_l,glx_d_l),inherit.aes = FALSE) +
+  geom_line(data = Heat_Curve_Ortiz,aes(asx_d_l,glx_d_l),inherit.aes = FALSE,col="forestgreen") +
+  geom_line(data = Heat_Curve_Crisp,aes(asx_d_l,glx_d_l),inherit.aes = FALSE,col="blue") +
+  annotate("text",x = 0.65,y=0.4,label="Ortiz",col="forestgreen")+
+  annotate("text",x = 0.75,y=0.2,label="Crisp",col="blue")+
+  ylim(0,1)+
+      labs(title = "Franchthi points within 2 sigma of the fitted curve")
+
+
+
+```
+
+
+## NEaar data on Patella
+```{r}
+NEaar <- read_csv(here("data","NEaar_patella.csv")) %>% 
+  clean_names() %>% 
+  mutate_at(.vars = c(2:12), as.numeric) %>% 
+  mutate(species=if_else(species==".Sp","sp.",species))
+
+
+
+species_plot <- NEaar %>% 
+  # mutate(species=if_else(species=="spp. (might be caerulea)","caerulea",species)) %>% 
+  filter(type=="H",
+         !is.na(species),
+         species!="spp. (might be caerulea)"
+         ) %>% 
+  ggplot()+
+  aes(asx_d_l,glx_d_l,col=species,fill=species)+
+  geom_point()+
+  geom_smooth(se = TRUE,method = "lm", formula = "y~exp(x)",alpha=0.2)
+
+species_plot+  geom_point(data=Heat_Data,aes(asx_d_l,glx_d_l),inherit.aes = FALSE,alpha=0.4)
+
+
+
+```
+
+
+
+# Plot through time
+```{r}
+
+AAR_chron %>% 
+  # left_join(by = c("trench","unit"),ProbChron) %>%
+#     left_join(by = c("trench","unit"),C14) %>%
+# filter(c14!=is.na(c14)) %>%
+# filter(trench=="FAS") %>%
+  # pivot_longer(1:11,names_to = "aa",values_to = "d_l") %>%
+  filter(type=="H"
+         # aa=="glx_d_l"|aa=="asx_d_l"
+        ) %>%
+  # na.omit() %>% 
+  # filter(d_l<1) %>% 
+  # arrange(unit) %>% 
+  ggplot()+
+  aes(x=asx_d_l,
+      y=glx_d_l,
+      col=prob_chron
+      )+
+  geom_point()+
+  # geom_smooth()+
+  # geom_path()+
+  # geom_text(aes(label=unit))+
+  # facet_wrap(~aa)+
+  # xlim(0.2,0.4)+
+  ylim(0,1)+
+  ggtitle("AAR Plot")
+
+
+```
+# Beach vs Cave
+```{r}
+
+gg_point <- AAR_chron %>% 
+    filter(type=="H",
+           # trench=="FAS",
+           glx_d_l<0.3) %>%
+    # pivot_longer(1:11,names_to = "aa",values_to = "d_l") %>%
+  # filter(
+    # aa=="ala_d_l",#|aa=="asx_d_l",
+         # d_l<1) %>% 
+  ggplot()+
+  aes(x=ala_d_l,
+      y=ser_ala,
+      col=prob_chron,
+      # size=prob_chron
+      )+
+  # geom_point(size=3)+
+  ggiraph::geom_point_interactive(aes(tooltip = sample_name),size=2)+
+  scale_colour_viridis_d()+
+  # geom_smooth(aes(group=1))+
+  # geom_path()+
+  # scale_colour_brewer(palette = "Paired")+
+  # geom_text(aes(label=unit))+
+  # coord_equal()+
+  # scale_color_manual(values = c("black","black","black","black",
+                                # "black","black","black","black",
+                                # "black","red"))+
+  # scale_size_manual(values=c(2,2,2,2,2,2,2,2,2,5))+
+  facet_wrap(~area)+#,scales = "free")+
+  # xlim(0,1)+
+  ylim(0.2,NA)+
+  ggtitle("AAR Plot")
+
+
+# gg_point = ggplot(data = dataset) +
+# 	geom_point_interactive(aes(x = wt, y = qsec, color = disp,
+#     tooltip = carname, data_id = carname)) + theme_minimal()
+
+x <- ggiraph::girafe(ggobj = gg_point,width_svg = 10)
+if( interactive() ) print(x)
+
+```
+# ASX vs ALA Trench FAS
+```{r}
+gg_point <- AAR_chron %>% 
+    filter(type=="H",
+           trench=="FAS",
+           glx_d_l<0.3
+           ) %>%
+    pivot_longer(1:11,names_to = "aa",values_to = "d_l") %>%
+  filter(
+    aa=="ala_d_l"|aa=="asx_d_l"|aa=="ser_ala",
+    d_l<1) %>%
+  ggplot()+
+  aes(x=unit,
+      y=d_l,
+      col=prob_chron,
+      size=prob_chron
+      )+
+  # geom_point(size=3)+
+  ggiraph::geom_point_interactive(aes(tooltip = sample_name ),size=1)+
+  scale_colour_viridis_d()+
+  # geom_smooth(aes(group=1))+
+  # geom_path()+
+  # scale_colour_brewer(palette = "Paired")+
+  # geom_text(aes(label=unit))+
+  # scale_color_manual(values = c("black","black","black","black",
+                                # "black","black","black","black",
+                                # "black","red"))+
+  # scale_size_manual(values=c(2,2,2,2,2,2,2,2,2,5))+
+  facet_wrap(~aa,scales = "free")+
+  # xlim(0,1)+
+  ylim(0.2,NA)+
+  ggtitle("AAR Plot")
+
+
+# gg_point = ggplot(data = dataset) +
+# 	geom_point_interactive(aes(x = wt, y = qsec, color = disp,
+#     tooltip = carname, data_id = carname)) + theme_minimal()
+
+x <- ggiraph::girafe(ggobj = gg_point,width_svg = 8,height_svg = 6)
+if( interactive() ) print(x)
+
+```
+
+
+
+
+
+---
+# DUMP
+
+## Sample Variability
+```{r}
+
+AAR %>% 
+  group_by(sample_name,type) %>% 
+    summarise_at(1:11,c(sd),na.rm=FALSE) %>% 
+    pivot_longer(3:13,names_to = "aa",values_to = "sd") %>%
+    separate(sample_name,remove = FALSE,into = c("trench","unit","specimen")) %>% 
+
+    # pivot_longer(3:13,names_to = "aa",values_to = "d_l") %>% View()
+    # pivot_wider(names_from = "type",values_from = "d_l",values_fn = mean) %>%
+  # filter(type=="H") %>% 
+  # filter(aa=="ser_ala"|aa=="ala_d_l"&H<1) %>% 
+  # left_join(by = c("trench","unit"),C14) %>% 
+  # filter(c14!=is.na(c14)) %>% 
+  # left_join(by = c("trench","unit"),ProbChron) %>%
+  # filter(prob_chron!=is.na(prob_chron)) %>% 
+  ggplot()+
+  aes(x=unit,
+      y=sd,
+      col=aa)+
+  # stat_ellipse(geom = "polygon",alpha=0.3)+
+  geom_point()+
+  # geom_text(aes(label=unit),nudge_y = 0.05)+
+  facet_wrap(~trench,scales = "free_x")+
+  ggtitle("Quality")
+
+```
